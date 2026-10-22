@@ -160,14 +160,15 @@
 
       return `
         <tr>
-          <td>#${ticket.id}</td>
+          <td><a href="/problem/${ticket.id}">#${ticket.id}</a></td>
           <td>${ticket.photo
             ? `<img src="${escapeHtml(ticket.photo)}" alt="รูปถ่ายอุปกรณ์">`
             : "-"}</td>
           <td>${escapeHtml(ticket.title)}<br>
             <small>${escapeHtml(ticket.description)}</small>
           </td>
-          <td>${escapeHtml(ticket.customer)}</td>
+          <td><a href="/person/${ticket.customer_id}">
+            ${escapeHtml(ticket.customer)}</a></td>
           <td>
             ${escapeHtml(ticket.equipment_type)} /
             ${escapeHtml(ticket.vendor)} ${escapeHtml(ticket.model)}<br>

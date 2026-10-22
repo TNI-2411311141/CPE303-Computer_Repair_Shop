@@ -415,7 +415,7 @@ static void list_problems(FCGX_Request *r) {
 	    "SELECT "
 	    "p.id,p.title,p.description,p.equipment_serial,p.photo,m.model_id,v.name,"
 	    "et.title,pt.title,ps.title,p.fix_cost,c.name,r.name,p.operating_"
-	    "system_info "
+	    "system_info,c.id,r.id "
 	    "FROM problem p JOIN equipment_model m ON "
 	    "m.id=p.equipment_model_id "
 	    "JOIN equipment_vendor v ON v.id=m.vendor_id JOIN equipment_type "
@@ -474,14 +474,139 @@ static void list_problems(FCGX_Request *r) {
 			}
 			FCGX_PutS(",\"customer\":", r->out);
 			json_string(r->out, sqlite3_column_text(stmt, 11));
+			FCGX_FPrintF(r->out, ",\"customer_id\":%d",
+			             sqlite3_column_int(stmt, 15));
 			FCGX_PutS(",\"respondent\":", r->out);
 			json_string(r->out, sqlite3_column_text(stmt, 12));
+			FCGX_FPrintF(r->out, ",\"respondent_id\":%d",
+			             sqlite3_column_int(stmt, 16));
 			FCGX_PutS(",\"os\":", r->out);
 			json_string(r->out, sqlite3_column_text(stmt, 13));
 			FCGX_PutS("}", r->out);
 	}
 	sqlite3_finalize(stmt);
 	FCGX_PutS("]", r->out);
+}
+
+static int path_id(const char *uri, const char *prefix) {
+	size_t prefix_length = strlen(prefix);
+	if (!uri || strncmp(uri, prefix, prefix_length))
+		return 0;
+	char *end = NULL;
+	long id = strtol(uri + prefix_length, &end, 10);
+	return end != uri + prefix_length && *end == '\0' && id > 0 &&
+		id <= INT_MAX
+	    ? (int)id
+	    : 0;
+}
+
+static void get_person(FCGX_Request *r, int id) {
+	sqlite3_stmt *stmt = NULL;
+	const char *sql =
+	    "SELECT gov_id,name,face,phone,email,address FROM person WHERE id=?";
+	if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+		sqlite_error_response(r, 500, "อ่านข้อมูลบุคคล");
+		return;
+	}
+	sqlite3_bind_int(stmt, 1, id);
+	if (sqlite3_step(stmt) != SQLITE_ROW) {
+		sqlite3_finalize(stmt);
+		error_response(r, "ไม่พบบุคคล");
+		return;
+	}
+	header(r, 200);
+	FCGX_FPrintF(r->out, "{\"id\":%d,\"gov_id\":", id);
+	json_string(r->out, sqlite3_column_text(stmt, 0));
+	FCGX_PutS(",\"name\":", r->out);
+	json_string(r->out, sqlite3_column_text(stmt, 1));
+	FCGX_PutS(",\"face\":", r->out);
+	const unsigned char *face = sqlite3_column_blob(stmt, 2);
+	int face_size = sqlite3_column_bytes(stmt, 2);
+	if (face && face_size > 0) {
+		FCGX_PutChar('"', r->out);
+		FCGX_FPrintF(r->out, "data:%s;base64,",
+		             image_mime_type(face, face_size));
+		base64_string(r->out, face, face_size);
+		FCGX_PutChar('"', r->out);
+	} else {
+		FCGX_PutS("null", r->out);
+	}
+	FCGX_PutS(",\"phone\":", r->out);
+	json_string(r->out, sqlite3_column_text(stmt, 3));
+	FCGX_PutS(",\"email\":", r->out);
+	json_string(r->out, sqlite3_column_text(stmt, 4));
+	FCGX_PutS(",\"address\":", r->out);
+	json_string(r->out, sqlite3_column_text(stmt, 5));
+	FCGX_PutS("}", r->out);
+	sqlite3_finalize(stmt);
+}
+
+static void get_problem(FCGX_Request *r, int id) {
+	sqlite3_stmt *stmt = NULL;
+	const char *sql =
+	    "SELECT p.title,p.description,p.equipment_serial,p.photo,m.model_id,"
+	    "v.name,et.title,pt.title,ps.title,p.fix_cost,c.id,c.name,r.id,r.name,"
+	    "p.operating_system_info FROM problem p "
+	    "JOIN equipment_model m ON m.id=p.equipment_model_id "
+	    "JOIN equipment_vendor v ON v.id=m.vendor_id JOIN equipment_type et "
+	    "ON et.id=m.type_id JOIN problem_type pt ON pt.id=p.type_id "
+	    "JOIN problem_status ps ON ps.id=p.status_id "
+	    "JOIN person c ON c.id=p.customer_id JOIN person r ON "
+	    "r.id=p.respondent_id WHERE p.id=?";
+	if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+		sqlite_error_response(r, 500, "อ่านข้อมูลงานซ่อม");
+		return;
+	}
+	sqlite3_bind_int(stmt, 1, id);
+	if (sqlite3_step(stmt) != SQLITE_ROW) {
+		sqlite3_finalize(stmt);
+		error_response(r, "ไม่พบงานซ่อม");
+		return;
+	}
+	header(r, 200);
+	FCGX_FPrintF(r->out, "{\"id\":%d,\"title\":", id);
+	json_string(r->out, sqlite3_column_text(stmt, 0));
+	FCGX_PutS(",\"description\":", r->out);
+	json_string(r->out, sqlite3_column_text(stmt, 1));
+	FCGX_PutS(",\"serial\":", r->out);
+	json_string(r->out, sqlite3_column_text(stmt, 2));
+	FCGX_PutS(",\"photo\":", r->out);
+	const unsigned char *photo = sqlite3_column_blob(stmt, 3);
+	int photo_size = sqlite3_column_bytes(stmt, 3);
+	if (photo && photo_size > 0) {
+		FCGX_PutChar('"', r->out);
+		FCGX_FPrintF(r->out, "data:%s;base64,",
+		             image_mime_type(photo, photo_size));
+		base64_string(r->out, photo, photo_size);
+		FCGX_PutChar('"', r->out);
+	} else {
+		FCGX_PutS("null", r->out);
+	}
+	FCGX_PutS(",\"model\":", r->out);
+	json_string(r->out, sqlite3_column_text(stmt, 4));
+	FCGX_PutS(",\"vendor\":", r->out);
+	json_string(r->out, sqlite3_column_text(stmt, 5));
+	FCGX_PutS(",\"equipment_type\":", r->out);
+	json_string(r->out, sqlite3_column_text(stmt, 6));
+	FCGX_PutS(",\"problem_type\":", r->out);
+	json_string(r->out, sqlite3_column_text(stmt, 7));
+	FCGX_PutS(",\"status\":", r->out);
+	json_string(r->out, sqlite3_column_text(stmt, 8));
+	FCGX_PutS(",\"charge\":", r->out);
+	if (sqlite3_column_type(stmt, 9) == SQLITE_NULL)
+		FCGX_PutS("null", r->out);
+	else
+		FCGX_FPrintF(r->out, "%d", sqlite3_column_int(stmt, 9));
+	FCGX_FPrintF(r->out, ",\"customer_id\":%d,\"customer\":",
+	             sqlite3_column_int(stmt, 10));
+	json_string(r->out, sqlite3_column_text(stmt, 11));
+	FCGX_FPrintF(r->out, ",\"respondent_id\":%d,\"respondent\":",
+	             sqlite3_column_int(stmt, 12));
+	json_string(r->out, sqlite3_column_text(stmt, 13));
+	FCGX_PutS(",\"os\":", r->out);
+	json_string(r->out, sqlite3_column_text(stmt, 14));
+	FCGX_PutS("}", r->out);
+	sqlite3_finalize(stmt);
 }
 
 static int list_options(FCGX_Stream *out, const char *table) {
@@ -790,6 +915,12 @@ int main(int argc, char **argv) {
 		if (uri && !strcmp(uri, "/problems") && method &&
 		    !strcmp(method, "GET")) {
 			list_problems(&request);
+		} else if (uri && method && !strcmp(method, "GET") &&
+		           path_id(uri, "/problems/")) {
+			get_problem(&request, path_id(uri, "/problems/"));
+		} else if (uri && method && !strcmp(method, "GET") &&
+		           path_id(uri, "/people/")) {
+			get_person(&request, path_id(uri, "/people/"));
 		} else if (uri && !strcmp(uri, "/options") && method &&
 		           !strcmp(method, "GET")) {
 			list_form_options(&request);

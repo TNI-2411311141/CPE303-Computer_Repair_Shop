@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ข้อมูลบุคคล</title>
+</head>
+<body>
+  <p><a href="/">กลับหน้าหลัก</a></p>
+  <h1>ข้อมูลบุคคล</h1>
+  <main id="person">กำลังโหลด...</main>
+  <script>
+    const id = location.pathname.split("/").pop();
+    const container = document.querySelector("#person");
+    const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (character) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;"
+    }[character]));
+
+    fetch(`/people/${encodeURIComponent(id)}`)
+      .then(async (response) => {
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || "โหลดข้อมูลไม่สำเร็จ");
+        return result;
+      })
+      .then((person) => {
+        container.innerHTML = `
+          ${person.face ? `<img src="${escapeHtml(person.face)}" alt="รูปถ่ายใบหน้า"
+                              width="160">` : ""}
+          <dl>
+            <dt>เลขประจำตัวประชาชน</dt><dd>${escapeHtml(person.gov_id)}</dd>
+            <dt>ชื่อ</dt><dd>${escapeHtml(person.name)}</dd>
+            <dt>เบอร์โทรศัพท์</dt><dd>${escapeHtml(person.phone)}</dd>
+            <dt>อีเมล</dt><dd>${escapeHtml(person.email)}</dd>
+            <dt>ที่อยู่</dt><dd>${escapeHtml(person.address)}</dd>
+          </dl>`;
+      })
+      .catch((error) => { container.textContent = error.message; });
+  </script>
+</body>
+</html>

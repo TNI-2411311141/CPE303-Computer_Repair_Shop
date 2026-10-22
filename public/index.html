@@ -183,7 +183,8 @@
         </tr>`;
     }
 
-    function setOptions(selectName, values, label = ({ title }) => title) {
+    function setOptions(selectName, values, label = ({ title }) => title,
+                        value = ({ title }) => title) {
       const select = form.elements[selectName];
       const selectedValue = select.value;
       const emptyOption = document.createElement("option");
@@ -191,13 +192,13 @@
       emptyOption.textContent = "-- กรุณาเลือก --";
       emptyOption.selected = true;
       emptyOption.disabled = true;
-      select.replaceChildren(emptyOption, ...values.map(({ title }) => {
+      select.replaceChildren(emptyOption, ...values.map((entry) => {
         const option = document.createElement("option");
-        option.value = title;
-        option.textContent = label({ title });
+        option.value = value(entry);
+        option.textContent = label(entry);
         return option;
       }));
-      if (values.some(({ title }) => title === selectedValue)) {
+      if (values.some((entry) => String(value(entry)) === selectedValue)) {
         select.value = selectedValue;
       }
     }
@@ -228,8 +229,10 @@
       options.people = result.people;
       options.vendors = result.vendors;
       options.models = result.models;
-      setOptions("customer", options.people);
-      setOptions("respondent", options.people);
+      setOptions("customer", options.people, ({ title }) => title,
+                 ({ id }) => id);
+      setOptions("respondent", options.people, ({ title }) => title,
+                 ({ id }) => id);
       setOptions("vendor", options.vendors);
       setOptions("equipment_type", options.equipment_types);
       setOptions("problem_type", options.problem_types);

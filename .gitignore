@@ -1,1 +1,6 @@
 nginx
+compile_commands.json
+*.sqlite3
+fastcgi_sqlite3
+fastcgi_sqlite3.sock
+log

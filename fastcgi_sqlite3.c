@@ -3,6 +3,7 @@
 #include <sqlite3.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include <sys/stat.h>
 
@@ -15,16 +16,17 @@ static void base64_string(FCGX_Stream *out, const unsigned char *data,
 	static const char alphabet[] =
 	    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 	for (int i = 0; i < size; i += 3) {
-		unsigned int block = (unsigned int)data[i] << 16;
+		uint32_t block = (uint32_t)data[i] << 16U;
 		int remaining = size - i;
 		if (remaining > 1)
-			block |= (unsigned int)data[i + 1] << 8;
+			block |= (uint32_t)data[i + 1] << 8U;
 		if (remaining > 2)
 			block |= data[i + 2];
-		FCGX_PutChar(alphabet[(block >> 18) & 63], out);
-		FCGX_PutChar(alphabet[(block >> 12) & 63], out);
-		FCGX_PutChar(remaining > 1 ? alphabet[(block >> 6) & 63] : '=', out);
-		FCGX_PutChar(remaining > 2 ? alphabet[block & 63] : '=', out);
+		FCGX_PutChar(alphabet[(block >> 18U) & 63U], out);
+		FCGX_PutChar(alphabet[(block >> 12U) & 63U], out);
+		FCGX_PutChar(remaining > 1 ? alphabet[(block >> 6U) & 63U] : '=',
+		             out);
+		FCGX_PutChar(remaining > 2 ? alphabet[block & 63U] : '=', out);
 	}
 }
 
@@ -48,8 +50,14 @@ static const char *status_reason(int status) {
 		return "OK";
 	case 201:
 		return "Created";
-	default:
+	case 400:
 		return "Bad Request";
+	case 404:
+		return "Not Found";
+	case 500:
+		return "Internal Server Error";
+	default:
+		return "Unknown";
 	}
 }
 
@@ -86,6 +94,18 @@ static void json_string(FCGX_Stream *out, const unsigned char *value) {
 			FCGX_PutChar('\\', out);
 		if (*s == '\n') {
 			FCGX_PutS("\\n", out);
+			continue;
+		}
+		if (*s == '\r') {
+			FCGX_PutS("\\r", out);
+			continue;
+		}
+		if (*s == '\t') {
+			FCGX_PutS("\\t", out);
+			continue;
+		}
+		if ((unsigned char)*s < 0x20) {
+			FCGX_FPrintF(out, "\\u%04x", (unsigned char)*s);
 			continue;
 		}
 		FCGX_PutChar(*s, out);
@@ -377,8 +397,8 @@ static void create_record(
 	}
 
 	if (!id) {
-		if (!strcmp(action, "person") &&
-		    insert_result == SQLITE_CONSTRAINT_UNIQUE) {
+			if (!strcmp(action, "person") &&
+			    insert_result == SQLITE_CONSTRAINT_UNIQUE) {
 			error_response(r, "เลขประจำตัวประชาชนนี้มีอยู่แล้ว");
 		} else {
 			error_response(r, sqlite3_errmsg(db));
@@ -404,11 +424,14 @@ static void list_problems(FCGX_Request *r) {
 	    "ps.id=p.status_id "
 	    "JOIN person c ON c.id=p.customer_id JOIN person r ON "
 	    "r.id=p.respondent_id ORDER BY p.id DESC";
+	if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+		sqlite_error_response(r, 500, "อ่านรายการงานซ่อม");
+		return;
+	}
 	header(r, 200);
 	FCGX_PutS("[", r->out);
-	if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
-		int first = 1;
-		while (sqlite3_step(stmt) == SQLITE_ROW) {
+	int first = 1;
+	while (sqlite3_step(stmt) == SQLITE_ROW) {
 			if (!first)
 				FCGX_PutS(",", r->out);
 			first = 0;
@@ -456,7 +479,6 @@ static void list_problems(FCGX_Request *r) {
 			FCGX_PutS(",\"os\":", r->out);
 			json_string(r->out, sqlite3_column_text(stmt, 13));
 			FCGX_PutS("}", r->out);
-		}
 	}
 	sqlite3_finalize(stmt);
 	FCGX_PutS("]", r->out);
@@ -554,6 +576,20 @@ static void list_models(FCGX_Stream *out) {
 }
 
 static void list_form_options(FCGX_Request *r) {
+	sqlite3_stmt *stmt = NULL;
+	const char *validation_sql =
+	    "SELECT 1 FROM person UNION ALL "
+	    "SELECT 1 FROM equipment_vendor UNION ALL "
+	    "SELECT 1 FROM equipment_model UNION ALL "
+	    "SELECT 1 FROM equipment_type UNION ALL "
+	    "SELECT 1 FROM problem_type UNION ALL "
+	    "SELECT 1 FROM problem_status LIMIT 0";
+	if (sqlite3_prepare_v2(db, validation_sql, -1, &stmt, NULL) !=
+	    SQLITE_OK) {
+		sqlite_error_response(r, 500, "อ่านตัวเลือกฟอร์ม");
+		return;
+	}
+	sqlite3_finalize(stmt);
 	header(r, 200);
 	FCGX_PutS("{\"people\":[", r->out);
 	list_people(r->out);
@@ -610,11 +646,15 @@ static void create_problem(FCGX_Request *r, const char *body) {
 	int issue_id =
 	    scalar_id("SELECT id FROM problem_type WHERE title=?", issue, 0);
 	int status_id =
-	    scalar_id("SELECT id FROM problem_status WHERE title=?", status, 1);
+	    scalar_id("SELECT id FROM problem_status WHERE title=?", status, 0);
 	int customer_id =
-	    scalar_id("SELECT id FROM person WHERE name=?", customer, 0);
+	    scalar_id("SELECT id FROM person WHERE id=?", customer, 0);
 	int respondent_id =
-	    scalar_id("SELECT id FROM person WHERE name=?", respondent, 0);
+	    scalar_id("SELECT id FROM person WHERE id=?", respondent, 0);
+	if (!customer_id || !respondent_id) {
+		error_response(r, "กรุณาเลือกข้อมูลบุคคลที่มีอยู่");
+		return;
+	}
 	if (!type_id || !issue_id || !customer_id || !respondent_id) {
 		error_response(r,
 		               "กรุณาเพิ่มและเลือกข้อมูลบุคคล ประเภท และผู้รับผิดชอบก่อน");
@@ -713,6 +753,7 @@ int main(int argc, char **argv) {
 	if (sqlite3_open("computer_repair_shop.sqlite3", &db) != SQLITE_OK) {
 		return EXIT_FAILURE;
 	}
+	sqlite3_extended_result_codes(db, 1);
 	sqlite3_exec(db, "PRAGMA foreign_keys=ON", NULL, NULL, NULL);
 	sqlite3_exec(
 	    db,
@@ -746,18 +787,18 @@ int main(int argc, char **argv) {
 			FCGX_Finish_r(&request);
 			continue;
 		}
-		if (uri && !strncmp(uri, "/problems", 9) && method &&
+		if (uri && !strcmp(uri, "/problems") && method &&
 		    !strcmp(method, "GET")) {
 			list_problems(&request);
-		} else if (uri && !strncmp(uri, "/options", 8) && method &&
+		} else if (uri && !strcmp(uri, "/options") && method &&
 		           !strcmp(method, "GET")) {
 			list_form_options(&request);
 		} else if (uri &&
-		           (!strncmp(uri, "/person", 7) ||
-		            !strncmp(uri, "/equipment_type", 15) ||
-		            !strncmp(uri, "/problem_type", 13) ||
-		            !strncmp(uri, "/equipment_vendor", 17) ||
-		            !strncmp(uri, "/equipment_model", 16)) &&
+		           (!strcmp(uri, "/person") ||
+		            !strcmp(uri, "/equipment_type") ||
+		            !strcmp(uri, "/problem_type") ||
+		            !strcmp(uri, "/equipment_vendor") ||
+		            !strcmp(uri, "/equipment_model")) &&
 		           method && !strcmp(method, "POST")) {
 			const char *action = NULL;
 			if (!strcmp(uri, "/person"))
@@ -771,7 +812,7 @@ int main(int argc, char **argv) {
 			else if (!strcmp(uri, "/equipment_model"))
 				action = "model";
 			create_record(&request, request_body, action);
-		} else if (uri && !strncmp(uri, "/problems", 9) && method &&
+		} else if (uri && !strcmp(uri, "/problems") && method &&
 		           !strcmp(method, "POST")) {
 			char action[32];
 			field(request_body, "action", action, sizeof action);

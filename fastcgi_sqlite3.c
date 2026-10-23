@@ -50,8 +50,6 @@ static const char *status_reason(int status) {
 		return "OK";
 	case 201:
 		return "Created";
-	case 204:
-		return "No Content";
 	case 400:
 		return "Bad Request";
 	case 405:
@@ -106,8 +104,8 @@ static int sqlite_write_status(int result) {
 	if (result == SQLITE_CONSTRAINT_UNIQUE ||
 	    code == SQLITE_CONSTRAINT_UNIQUE)
 		return 409;
-	if ((result & 0xff) == SQLITE_CONSTRAINT ||
-	    (code & 0xff) == SQLITE_CONSTRAINT)
+	if (((unsigned int)result & 0xffU) == SQLITE_CONSTRAINT ||
+	    ((unsigned int)code & 0xffU) == SQLITE_CONSTRAINT)
 		return 422;
 	return 500;
 }
@@ -342,8 +340,9 @@ static int insert_text(const char *sql, const char *value, int *result) {
 		*result = sqlite3_step(stmt);
 		if (*result == SQLITE_DONE)
 			id = (int)sqlite3_last_insert_rowid(db);
-	} else
+	} else {
 		*result = SQLITE_ERROR;
+	}
 	sqlite3_finalize(stmt);
 	return id;
 }
@@ -659,7 +658,11 @@ static void get_problem(FCGX_Request *r, int id) {
 }
 
 static void update_person(FCGX_Request *r, int id, const char *body) {
-	char gov_id[128], name[256], phone[64], email[256], address[512];
+	char gov_id[128];
+	char name[256];
+	char phone[64];
+	char email[256];
+	char address[512];
 	char face_base64[1400000];
 	unsigned char face[1050000];
 	field(body, "gov_id", gov_id, sizeof gov_id);
@@ -716,8 +719,14 @@ static void update_person(FCGX_Request *r, int id, const char *body) {
 
 static void update_problem_resource(FCGX_Request *r, int id,
                                     const char *body) {
-	char title[256], description[2048], serial[256], status[128];
-	char os[256], charge[32], respondent[16], photo_base64[1400000];
+	char title[256];
+	char description[2048];
+	char serial[256];
+	char status[128];
+	char os[256];
+	char charge[32];
+	char respondent[16];
+	char photo_base64[1400000];
 	unsigned char photo[1050000];
 	field(body, "title", title, sizeof title);
 	field(body, "description", description, sizeof description);
@@ -783,7 +792,7 @@ static void update_problem_resource(FCGX_Request *r, int id,
 	FCGX_PutS("บันทึกสำเร็จ", r->out);
 }
 
-static int list_options(FCGX_Stream *out, const char *table) {
+static void list_options(FCGX_Stream *out, const char *table) {
 	sqlite3_stmt *stmt = NULL;
 	int first = 1;
 	const char *sql = NULL;
@@ -794,10 +803,10 @@ static int list_options(FCGX_Stream *out, const char *table) {
 	} else if (!strcmp(table, "problem_status")) {
 		sql = "SELECT id,title FROM problem_status ORDER BY id";
 	} else {
-		return 0;
+		return;
 	}
 	if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
-		return 0;
+		return;
 	}
 	while (sqlite3_step(stmt) == SQLITE_ROW) {
 		if (!first)
@@ -809,7 +818,6 @@ static int list_options(FCGX_Stream *out, const char *table) {
 		FCGX_PutS("}", out);
 	}
 	sqlite3_finalize(stmt);
-	return 1;
 }
 
 static void list_people(FCGX_Stream *out) {
@@ -906,20 +914,6 @@ static void list_models(FCGX_Stream *out) {
 }
 
 static void list_form_options(FCGX_Request *r) {
-	sqlite3_stmt *stmt = NULL;
-	const char *validation_sql =
-	    "SELECT 1 FROM person UNION ALL "
-	    "SELECT 1 FROM equipment_vendor UNION ALL "
-	    "SELECT 1 FROM equipment_model UNION ALL "
-	    "SELECT 1 FROM equipment_type UNION ALL "
-	    "SELECT 1 FROM problem_type UNION ALL "
-	    "SELECT 1 FROM problem_status LIMIT 0";
-	if (sqlite3_prepare_v2(db, validation_sql, -1, &stmt, NULL) !=
-	    SQLITE_OK) {
-		sqlite_error_response(r, 500, "อ่านตัวเลือกฟอร์ม");
-		return;
-	}
-	sqlite3_finalize(stmt);
 	header(r, 200);
 	FCGX_PutS("{\"people\":[", r->out);
 	list_people(r->out);
@@ -928,13 +922,12 @@ static void list_form_options(FCGX_Request *r) {
 	FCGX_PutS("],\"models\":[", r->out);
 	list_models(r->out);
 	FCGX_PutS("],\"equipment_types\":[", r->out);
-	int ok = list_options(r->out, "equipment_type");
+	list_options(r->out, "equipment_type");
 	FCGX_PutS("],\"problem_types\":[", r->out);
-	ok = list_options(r->out, "problem_type") && ok;
+	list_options(r->out, "problem_type");
 	FCGX_PutS("],\"statuses\":[", r->out);
-	ok = list_options(r->out, "problem_status") && ok;
+	list_options(r->out, "problem_status");
 	FCGX_PutS("]}", r->out);
-	(void)ok;
 }
 
 static void list_collection(FCGX_Request *r, const char *resource) {
@@ -1019,20 +1012,15 @@ static void create_problem(FCGX_Request *r, const char *body) {
 	    scalar_id("SELECT id FROM person WHERE id=?", customer, 0);
 	int respondent_id =
 	    scalar_id("SELECT id FROM person WHERE id=?", respondent, 0);
-	if (!customer_id || !respondent_id) {
-		error_response_status(r, 422, "กรุณาเลือกข้อมูลบุคคลที่มีอยู่");
-		return;
-	}
-	if (!type_id || !issue_id || !customer_id || !respondent_id) {
+	if (!type_id || !issue_id || !status_id || !customer_id ||
+	    !respondent_id) {
 		error_response_status(
 		    r, 422,
-		    "กรุณาเพิ่มและเลือกข้อมูลบุคคล ประเภท และผู้รับผิดชอบก่อน");
+		    "กรุณาเพิ่มและเลือกข้อมูลบุคคล ประเภท สถานะ และผู้รับผิดชอบก่อน");
 		return;
 	}
-	int vendor_id = scalar_id(
-	    "SELECT id FROM equipment_vendor WHERE name=?", vendor, 0);
 	int equipment_model_id = model_id_for(model_id, vendor, type);
-	if (!vendor_id || !equipment_model_id) {
+	if (!equipment_model_id) {
 		error_response_status(r, 422,
 		                     "กรุณาเพิ่มและเลือกผู้ผลิตกับรุ่นอุปกรณ์ก่อน");
 		return;

@@ -192,16 +192,19 @@ static int base64_value(char character) {
 	return -1;
 }
 
-static size_t decode_base64(const char *encoded, unsigned char *decoded) {
+static int decode_base64(const char *encoded, unsigned char *decoded,
+                         size_t *decoded_size) {
 	size_t length = strlen(encoded);
 	size_t output = 0;
 	unsigned int value = 0;
 	int bits = -8;
 
 	for (size_t i = 0; i < length; i++) {
+		if (encoded[i] == '=')
+			break;
 		int signed_digit = base64_value(encoded[i]);
 		if (signed_digit < 0)
-			continue;
+			return 0;
 		unsigned int digit = (unsigned int)signed_digit;
 		value = (value << 6U) | digit;
 		bits += 6;
@@ -212,7 +215,8 @@ static size_t decode_base64(const char *encoded, unsigned char *decoded) {
 			bits -= 8;
 		}
 	}
-	return output;
+	*decoded_size = output;
+	return 1;
 }
 
 static void decode_form_value(const char *encoded, size_t length, char *decoded,
@@ -389,7 +393,11 @@ static void create_record(
 			return;
 		}
 		sqlite3_stmt *stmt = NULL;
-		size_t face_size = decode_base64(face_base64, face);
+		size_t face_size;
+		if (!decode_base64(face_base64, face, &face_size)) {
+			error_response_status(r, 422, "รูปถ่ายไม่ใช่ข้อมูล Base64 ที่ถูกต้อง");
+			return;
+		}
 		const char *sql =
 		    "INSERT INTO person(gov_id,name,face,phone,email,address) "
 		    "VALUES (?,?,?,?,?,?)";
@@ -689,7 +697,12 @@ static void update_person(FCGX_Request *r, int id, const char *body) {
 	sqlite3_bind_text(stmt, parameter++, gov_id, -1, SQLITE_TRANSIENT);
 	sqlite3_bind_text(stmt, parameter++, name, -1, SQLITE_TRANSIENT);
 	if (*face_base64) {
-		size_t face_size = decode_base64(face_base64, face);
+		size_t face_size;
+		if (!decode_base64(face_base64, face, &face_size)) {
+			error_response_status(r, 422, "รูปถ่ายไม่ใช่ข้อมูล Base64 ที่ถูกต้อง");
+			sqlite3_finalize(stmt);
+			return;
+		}
 		sqlite3_bind_blob(stmt, parameter++, face, (int)face_size,
 		                  SQLITE_TRANSIENT);
 	}
@@ -773,7 +786,12 @@ static void update_problem_resource(FCGX_Request *r, int id,
 	sqlite3_bind_text(stmt, parameter++, os, -1, SQLITE_TRANSIENT);
 	sqlite3_bind_text(stmt, parameter++, charge, -1, SQLITE_TRANSIENT);
 	if (*photo_base64) {
-		size_t photo_size = decode_base64(photo_base64, photo);
+		size_t photo_size;
+		if (!decode_base64(photo_base64, photo, &photo_size)) {
+			error_response_status(r, 422, "รูปถ่ายไม่ใช่ข้อมูล Base64 ที่ถูกต้อง");
+			sqlite3_finalize(stmt);
+			return;
+		}
 		sqlite3_bind_blob(stmt, parameter++, photo, (int)photo_size,
 		                  SQLITE_TRANSIENT);
 	}
@@ -1035,7 +1053,12 @@ static void create_problem(FCGX_Request *r, const char *body) {
 		sqlite_error_response(r, 500, "เตรียมคำสั่งบันทึกงานซ่อม");
 		return;
 	}
-	size_t photo_size = decode_base64(photo_base64, photo);
+	size_t photo_size;
+	if (!decode_base64(photo_base64, photo, &photo_size)) {
+		error_response_status(r, 422, "รูปถ่ายไม่ใช่ข้อมูล Base64 ที่ถูกต้อง");
+		sqlite3_finalize(stmt);
+		return;
+	}
 	sqlite3_bind_int(stmt, 1, issue_id);
 	sqlite3_bind_text(stmt, 2, title, -1, SQLITE_TRANSIENT);
 	sqlite3_bind_text(stmt, 3, description, -1, SQLITE_TRANSIENT);

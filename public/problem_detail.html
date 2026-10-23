@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>รายละเอียดงานซ่อม</title>
+  <style>
+    label,
+    input,
+    select,
+    textarea {
+      display: block;
+    }
+
+    label {
+      margin-bottom: 1em;
+    }
+
+    form.read-only input:not([type="file"]),
+    form.read-only select,
+    form.read-only textarea {
+      border: 0;
+      background: transparent;
+      color: inherit;
+      padding-left: 0;
+      padding-right: 0;
+      opacity: 1;
+      margin-top: 0.25em;
+    }
+  </style>
+</head>
+<body>
+  <p><a href="/">กลับหน้าหลัก</a></p>
+  <h1>รายละเอียดงานซ่อม</h1>
+  <main id="problem">กำลังโหลด...</main>
+  <script>
+    const id = location.pathname.split("/").pop();
+    const container = document.querySelector("#problem");
+    const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (character) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;"
+    }[character]));
+    fetch(`/problems/${encodeURIComponent(id)}`)
+      .then(async (response) => {
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || "โหลดข้อมูลไม่สำเร็จ");
+        return result;
+      })
+      .then(async (problem) => {
+        container.innerHTML = `
+          ${problem.photo ? `<img src="${escapeHtml(problem.photo)}"
+                               alt="รูปถ่ายอุปกรณ์" width="240">` : ""}
+          <dl>
+            <dt>ลูกค้า</dt>
+            <dd><a href="/person/${problem.customer_id}">
+              ${escapeHtml(problem.customer)}</a></dd>
+            <dt>ผู้รับผิดชอบ</dt>
+            <dd><a href="/person/${problem.respondent_id}">
+              ${escapeHtml(problem.respondent)}</a></dd>
+            <dt>อุปกรณ์</dt>
+            <dd>${escapeHtml(problem.equipment_type)} /
+              ${escapeHtml(problem.vendor)} ${escapeHtml(problem.model)}</dd>
+            <dt>ประเภทปัญหา</dt>
+            <dd>${escapeHtml(problem.problem_type)}</dd>
+          </dl>
+          <form id="edit-problem">
+            <label>หัวข้องาน<input name="title" required
+              value="${escapeHtml(problem.title)}"></label>
+            <label>รายละเอียด<textarea name="description">${escapeHtml(
+              problem.description)}</textarea></label>
+            <label>หมายเลขเครื่อง<input name="serial"
+              value="${escapeHtml(problem.serial)}"></label>
+            <label>ผู้รับผิดชอบ<select name="respondent_id" required></select></label>
+            <label>สถานะ<select name="status" required></select></label>
+            <label>ระบบปฏิบัติการ<input name="os"
+              value="${escapeHtml(problem.os)}"></label>
+            <label>ค่าซ่อม<input name="charge" type="number" min="0" step="1"
+              value="${problem.charge ?? ""}"></label>
+            <label>รูปถ่ายอุปกรณ์ใหม่<input name="photo" type="file"
+              accept="image/*"></label>
+            <button type="button" id="edit-button">แก้ไขข้อมูล</button>
+            <button type="submit" id="save-button" disabled>บันทึกการแก้ไข</button>
+            <span id="message"></span>
+          </form>`;
+        const form = document.querySelector("#edit-problem");
+        const editButton = form.querySelector("#edit-button");
+        const saveButton = form.querySelector("#save-button");
+        const fields = [...form.elements].filter((element) => element.name);
+        function setEditing(editing) {
+          form.classList.toggle("read-only", !editing);
+          fields.forEach((field) => {
+            field.readOnly = !editing;
+            field.disabled = !editing;
+          });
+          editButton.disabled = editing;
+          saveButton.disabled = !editing;
+        }
+        const options = await fetch("/options").then((response) => response.json());
+        const respondent = form.elements.respondent_id;
+        respondent.replaceChildren(...options.people.map(({ id, title }) => {
+          const option = document.createElement("option");
+          option.value = id;
+          option.textContent = title;
+          option.selected = id === problem.respondent_id;
+          return option;
+        }));
+        const status = form.elements.status;
+        status.replaceChildren(...options.statuses.map(({ title }) => {
+          const option = document.createElement("option");
+          option.value = title;
+          option.textContent = title;
+          option.selected = title === problem.status;
+          return option;
+        }));
+        setEditing(false);
+        editButton.addEventListener("click", () => setEditing(true));
+        form.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const data = new FormData(form);
+          const photo = data.get("photo");
+          if (photo instanceof File && photo.size) {
+            if (photo.size > 512 * 1024) {
+              form.querySelector("#message").textContent =
+                "รูปถ่ายต้องมีขนาดไม่เกิน 512 KB";
+              return;
+            }
+            const bytes = new Uint8Array(await photo.arrayBuffer());
+            let binary = "";
+            for (const byte of bytes) binary += String.fromCharCode(byte);
+            data.set("photo", btoa(binary));
+          } else {
+            data.delete("photo");
+          }
+          const response = await fetch(`/problems/${encodeURIComponent(id)}`, {
+            method: "PATCH",
+            headers: {"Content-Type": "application/x-www-form-urlencoded"},
+            body: new URLSearchParams(data)
+          });
+          const result = await response.json();
+          form.querySelector("#message").textContent =
+            result.ok ? "บันทึกสำเร็จ" : result.error;
+          if (result.ok) setEditing(false);
+        });
+      })
+      .catch((error) => { container.textContent = error.message; });
+  </script>
+</body>
+</html>

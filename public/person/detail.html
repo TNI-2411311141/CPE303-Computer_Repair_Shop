@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ข้อมูลบุคคล</title>
+  <style>
+    label,
+    input,
+    textarea {
+      display: block;
+    }
+
+    label {
+      margin-bottom: 1em;
+    }
+
+    form.read-only input:not([type="file"]),
+    form.read-only textarea {
+      border: 0;
+      background: transparent;
+      color: inherit;
+      padding-left: 0;
+      padding-right: 0;
+      opacity: 1;
+      margin-top: 0.25em;
+    }
+  </style>
+</head>
+<body>
+  <p><a href="/">กลับหน้าหลัก</a></p>
+  <h1>ข้อมูลบุคคล</h1>
+  <main id="person">กำลังโหลด...</main>
+  <script>
+    const id = location.pathname.split("/").pop();
+    const container = document.querySelector("#person");
+    const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (character) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;"
+    }[character]));
+
+    fetch(`/people/${encodeURIComponent(id)}`)
+      .then(async (response) => {
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || "โหลดข้อมูลไม่สำเร็จ");
+        return result;
+      })
+      .then((person) => {
+        container.innerHTML = `
+          ${person.face ? `<img src="${escapeHtml(person.face)}" alt="รูปถ่ายใบหน้า"
+                              width="160">` : ""}
+          <form id="edit-person">
+            <label>เลขประจำตัวประชาชน<input name="gov_id" required
+              value="${escapeHtml(person.gov_id)}"></label>
+            <label>ชื่อ<input name="name" required
+              value="${escapeHtml(person.name)}"></label>
+            <label>เบอร์โทรศัพท์<input name="phone" required
+              value="${escapeHtml(person.phone)}"></label>
+            <label>อีเมล<input name="email" type="email" required
+              value="${escapeHtml(person.email)}"></label>
+            <label>ที่อยู่<input name="address" required
+              value="${escapeHtml(person.address)}"></label>
+            <label>รูปถ่ายใบหน้าใหม่<input name="face" type="file"
+              accept="image/*"></label>
+            <button type="button" id="edit-button">แก้ไขข้อมูล</button>
+            <button type="submit" id="save-button" disabled>บันทึกการแก้ไข</button>
+            <span id="message"></span>
+          </form>`;
+        const form = document.querySelector("#edit-person");
+        const editButton = form.querySelector("#edit-button");
+        const saveButton = form.querySelector("#save-button");
+        const fields = [...form.elements].filter((element) => element.name);
+        function setEditing(editing) {
+          form.classList.toggle("read-only", !editing);
+          fields.forEach((field) => {
+            field.readOnly = !editing;
+            field.disabled = !editing;
+          });
+          editButton.disabled = editing;
+          saveButton.disabled = !editing;
+        }
+        setEditing(false);
+        editButton.addEventListener("click", () => setEditing(true));
+        form.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const data = new FormData(form);
+          const face = data.get("face");
+          if (face instanceof File && face.size) {
+            if (face.size > 512 * 1024) {
+              form.querySelector("#message").textContent =
+                "รูปถ่ายต้องมีขนาดไม่เกิน 512 KB";
+              return;
+            }
+            const bytes = new Uint8Array(await face.arrayBuffer());
+            let binary = "";
+            for (const byte of bytes) binary += String.fromCharCode(byte);
+            data.set("face", btoa(binary));
+          } else {
+            data.delete("face");
+          }
+          const response = await fetch(`/people/${encodeURIComponent(id)}`, {
+            method: "PATCH",
+            headers: {"Content-Type": "application/x-www-form-urlencoded"},
+            body: new URLSearchParams(data)
+          });
+          const result = await response.json();
+          form.querySelector("#message").textContent =
+            result.ok ? "บันทึกสำเร็จ" : result.error;
+          if (result.ok) setEditing(false);
+        });
+      })
+      .catch((error) => { container.textContent = error.message; });
+  </script>
+</body>
+</html>

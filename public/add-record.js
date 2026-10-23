@@ -1,6 +1,38 @@
 const form = document.querySelector("form");
 const message = form.querySelector("span");
-const endpoint = `/${location.pathname.split("/").pop().replace(".html", "")}`;
+const pathParts = location.pathname.split("/").filter(Boolean);
+const endpoint = location.pathname.endsWith("/")
+  ? `/${pathParts.at(-1)}`
+  : `/${pathParts.at(-1).replace(".html", "")}`;
+const collection = endpoint === "/person" ? "/people" : endpoint;
+const tableBody = document.querySelector("#records");
+const tableColumns = {
+  "/person": [["gov_id", "เลขประจำตัวประชาชน"], ["name", "ชื่อ"],
+    ["phone", "เบอร์โทรศัพท์"], ["email", "อีเมล"], ["address", "ที่อยู่"]],
+  "/equipment_type": [["id", "รหัส"], ["title", "ประเภทอุปกรณ์"]],
+  "/problem_type": [["id", "รหัส"], ["title", "ประเภทปัญหา"]],
+  "/equipment_vendor": [["id", "รหัส"], ["title", "ผู้ผลิต"]],
+  "/equipment_model": [["id", "รหัส"], ["title", "รุ่น"],
+    ["vendor", "ผู้ผลิต"], ["equipment_type", "ประเภทอุปกรณ์"]]
+};
+
+function escapeHtml(value) {
+  return String(value ?? "-").replace(/[&<>"']/g, (character) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;"
+  }[character]));
+}
+
+async function loadRecords() {
+  if (!tableBody) return;
+  const response = await fetch(collection);
+  const records = await response.json();
+  if (!response.ok) throw new Error(records.error || "โหลดข้อมูลไม่สำเร็จ");
+  const columns = tableColumns[endpoint];
+  tableBody.innerHTML = records.length
+    ? records.map((record) => `<tr>${columns.map(([key]) =>
+        `<td>${escapeHtml(record[key])}</td>`).join("")}</tr>`).join("")
+    : `<tr><td colspan="${columns.length}">ยังไม่มีข้อมูล</td></tr>`;
+}
 
 function fill(select, values) {
   const selectedValue = select.value;
@@ -51,6 +83,7 @@ form.addEventListener("submit", async (event) => {
   message.textContent = result.ok ? "เพิ่มข้อมูลสำเร็จ" : result.error;
   if (result.ok) {
     form.reset();
+    loadRecords().catch((error) => { message.textContent = error.message; });
   }
 });
 
@@ -59,3 +92,5 @@ if (endpoint === "/equipment_model") {
     message.textContent = error.message;
   });
 }
+
+loadRecords().catch((error) => { message.textContent = error.message; });

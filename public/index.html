@@ -35,11 +35,11 @@
   <p class="subtitle">บันทึก ติดตาม และตรวจสอบงานซ่อมหน้าร้าน</p>
 
   <nav>
-    <a href="/person.html">บุคคล</a> |
-    <a href="/equipment_type.html">ประเภทอุปกรณ์</a> |
-    <a href="/problem_type.html">ประเภทปัญหา</a> |
-    <a href="/equipment_vendor.html">ผู้ผลิต</a> |
-    <a href="/equipment_model.html">รุ่นอุปกรณ์</a>
+    <a href="/person/">บุคคล</a> |
+    <a href="/equipment_type/">ประเภทอุปกรณ์</a> |
+    <a href="/problem_type/">ประเภทปัญหา</a> |
+    <a href="/equipment_vendor/">ผู้ผลิต</a> |
+    <a href="/equipment_model/">รุ่นอุปกรณ์</a>
   </nav>
 
   <section class="card">
@@ -117,13 +117,14 @@
             <th>ลูกค้า</th>
             <th>อุปกรณ์</th>
             <th>ปัญหา</th>
+            <th>ผู้รับผิดชอบ</th>
             <th>สถานะ</th>
             <th>ราคา</th>
           </tr>
         </thead>
         <tbody id="tickets">
           <tr>
-            <td colspan="8">กำลังโหลด...</td>
+            <td colspan="9">กำลังโหลด...</td>
           </tr>
         </tbody>
       </table>
@@ -175,6 +176,8 @@
             <small>${escapeHtml(ticket.serial)}</small>
           </td>
           <td>${escapeHtml(ticket.problem_type)}</td>
+          <td><a href="/person/${ticket.respondent_id}">
+            ${escapeHtml(ticket.respondent)}</a></td>
           <td class="status">${escapeHtml(ticket.status)}</td>
           <td>
             ${charge}
@@ -247,7 +250,7 @@
 
       ticketTable.innerHTML = tickets.length
         ? tickets.map(ticketRow).join("")
-        : '<tr><td colspan="8">ยังไม่มีงานซ่อม</td></tr>';
+        : '<tr><td colspan="9">ยังไม่มีงานซ่อม</td></tr>';
     }
 
     form.addEventListener("submit", async (event) => {
@@ -301,12 +304,10 @@
       if (!status) return;
 
       const charge = prompt("ราคาซ่อม", button.dataset.charge);
-      const response = await fetch("/problems", {
-        method: "POST",
+      const response = await fetch(`/problems/${button.dataset.id}`, {
+        method: "PATCH",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams({
-          action: "update",
-          id: button.dataset.id,
           status,
           charge: charge ?? ""
         })

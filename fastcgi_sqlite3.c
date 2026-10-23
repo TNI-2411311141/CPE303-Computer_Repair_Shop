@@ -255,6 +255,19 @@ static int scalar_id(const char *sql, const char *value, int fallback) {
 	return id;
 }
 
+static int record_exists(const char *table, int id) {
+	char sql[64];
+	sqlite3_stmt *stmt = NULL;
+	int exists = 0;
+	snprintf(sql, sizeof sql, "SELECT 1 FROM %s WHERE id=?", table);
+	if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+		sqlite3_bind_int(stmt, 1, id);
+		exists = sqlite3_step(stmt) == SQLITE_ROW;
+	}
+	sqlite3_finalize(stmt);
+	return exists;
+}
+
 static int model_id_for(const char *model, const char *vendor,
                         const char *type) {
 	sqlite3_stmt *stmt = NULL;
@@ -490,7 +503,7 @@ static void list_problems(FCGX_Request *r) {
 
 static int path_id(const char *uri, const char *prefix) {
 	size_t prefix_length = strlen(prefix);
-	if (!uri || strncmp(uri, prefix, prefix_length))
+	if (!uri || strncmp(uri, prefix, prefix_length) != 0)
 		return 0;
 	char *end = NULL;
 	long id = strtol(uri + prefix_length, &end, 10);
@@ -609,6 +622,129 @@ static void get_problem(FCGX_Request *r, int id) {
 	sqlite3_finalize(stmt);
 }
 
+static void update_person(FCGX_Request *r, int id, const char *body) {
+	char gov_id[128], name[256], phone[64], email[256], address[512];
+	char face_base64[1400000];
+	unsigned char face[1050000];
+	field(body, "gov_id", gov_id, sizeof gov_id);
+	field(body, "name", name, sizeof name);
+	field(body, "phone", phone, sizeof phone);
+	field(body, "email", email, sizeof email);
+	field(body, "address", address, sizeof address);
+	field(body, "face", face_base64, sizeof face_base64);
+	if (!*gov_id || !*name || !*phone || !*email || !*address) {
+		error_response(r, "กรุณากรอกข้อมูลบุคคลให้ครบถ้วน");
+		return;
+	}
+	sqlite3_stmt *stmt = NULL;
+	const char *sql = *face_base64
+	    ? "UPDATE person SET gov_id=?,name=?,face=?,phone=?,email=?,"
+	      "address=? WHERE id=?"
+	    : "UPDATE person SET gov_id=?,name=?,phone=?,email=?,address=? "
+	      "WHERE id=?";
+	if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+		sqlite_error_response(r, 500, "เตรียมแก้ไขข้อมูลบุคคล");
+		return;
+	}
+	int parameter = 1;
+	sqlite3_bind_text(stmt, parameter++, gov_id, -1, SQLITE_TRANSIENT);
+	sqlite3_bind_text(stmt, parameter++, name, -1, SQLITE_TRANSIENT);
+	if (*face_base64) {
+		size_t face_size = decode_base64(face_base64, face);
+		sqlite3_bind_blob(stmt, parameter++, face, (int)face_size,
+		                  SQLITE_TRANSIENT);
+	}
+	sqlite3_bind_text(stmt, parameter++, phone, -1, SQLITE_TRANSIENT);
+	sqlite3_bind_text(stmt, parameter++, email, -1, SQLITE_TRANSIENT);
+	sqlite3_bind_text(stmt, parameter++, address, -1, SQLITE_TRANSIENT);
+	sqlite3_bind_int(stmt, parameter, id);
+	int result = sqlite3_step(stmt);
+	sqlite3_finalize(stmt);
+	if (result != SQLITE_DONE) {
+		if (result == SQLITE_CONSTRAINT_UNIQUE) {
+			error_response(r, "เลขประจำตัวประชาชนนี้มีอยู่แล้ว");
+		} else {
+			sqlite_error_response(r, 400, "แก้ไขข้อมูลบุคคล");
+		}
+		return;
+	}
+	if (!record_exists("person", id)) {
+		error_response(r, "ไม่พบบุคคล");
+		return;
+	}
+	header(r, 200);
+	FCGX_PutS("{\"ok\":true}", r->out);
+}
+
+static void update_problem_resource(FCGX_Request *r, int id,
+                                    const char *body) {
+	char title[256], description[2048], serial[256], status[128];
+	char os[256], charge[32], respondent[16], photo_base64[1400000];
+	unsigned char photo[1050000];
+	field(body, "title", title, sizeof title);
+	field(body, "description", description, sizeof description);
+	field(body, "serial", serial, sizeof serial);
+	field(body, "status", status, sizeof status);
+	field(body, "respondent_id", respondent, sizeof respondent);
+	field(body, "os", os, sizeof os);
+	field(body, "charge", charge, sizeof charge);
+	field(body, "photo", photo_base64, sizeof photo_base64);
+	if (!*title || !*status) {
+		error_response(r, "กรุณากรอกข้อมูลงานซ่อมที่จำเป็นให้ครบถ้วน");
+		return;
+	}
+	int status_id =
+	    scalar_id("SELECT id FROM problem_status WHERE title=?", status, 0);
+	int respondent_id =
+	    scalar_id("SELECT id FROM person WHERE id=?", respondent, 0);
+	if (!status_id) {
+		error_response(r, "ไม่พบสถานะงานซ่อม");
+		return;
+	}
+	if (!respondent_id) {
+		error_response(r, "ไม่พบผู้รับผิดชอบ");
+		return;
+	}
+	sqlite3_stmt *stmt = NULL;
+	const char *sql = *photo_base64
+	    ? "UPDATE problem SET title=?,description=?,equipment_serial=?,"
+	      "respondent_id=?,status_id=?,operating_system_info=?,"
+	      "fix_cost=NULLIF(?,''),photo=? WHERE id=?"
+	    : "UPDATE problem SET title=?,description=?,equipment_serial=?,"
+	      "respondent_id=?,status_id=?,operating_system_info=?,"
+	      "fix_cost=NULLIF(?, '') WHERE id=?";
+	if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+		sqlite_error_response(r, 500, "เตรียมแก้ไขงานซ่อม");
+		return;
+	}
+	int parameter = 1;
+	sqlite3_bind_text(stmt, parameter++, title, -1, SQLITE_TRANSIENT);
+	sqlite3_bind_text(stmt, parameter++, description, -1, SQLITE_TRANSIENT);
+	sqlite3_bind_text(stmt, parameter++, serial, -1, SQLITE_TRANSIENT);
+	sqlite3_bind_int(stmt, parameter++, respondent_id);
+	sqlite3_bind_int(stmt, parameter++, status_id);
+	sqlite3_bind_text(stmt, parameter++, os, -1, SQLITE_TRANSIENT);
+	sqlite3_bind_text(stmt, parameter++, charge, -1, SQLITE_TRANSIENT);
+	if (*photo_base64) {
+		size_t photo_size = decode_base64(photo_base64, photo);
+		sqlite3_bind_blob(stmt, parameter++, photo, (int)photo_size,
+		                  SQLITE_TRANSIENT);
+	}
+	sqlite3_bind_int(stmt, parameter, id);
+	int result = sqlite3_step(stmt);
+	sqlite3_finalize(stmt);
+	if (result != SQLITE_DONE) {
+		sqlite_error_response(r, 400, "แก้ไขงานซ่อม");
+		return;
+	}
+	if (!record_exists("problem", id)) {
+		error_response(r, "ไม่พบงานซ่อม");
+		return;
+	}
+	header(r, 200);
+	FCGX_PutS("{\"ok\":true}", r->out);
+}
+
 static int list_options(FCGX_Stream *out, const char *table) {
 	sqlite3_stmt *stmt = NULL;
 	int first = 1;
@@ -651,6 +787,33 @@ static void list_people(FCGX_Stream *out) {
 		FCGX_FPrintF(
 		    out, "{\"id\":%d,\"title\":", sqlite3_column_int(stmt, 0));
 		json_string(out, sqlite3_column_text(stmt, 1));
+		FCGX_PutS("}", out);
+	}
+	sqlite3_finalize(stmt);
+}
+
+static void list_people_collection(FCGX_Stream *out) {
+	sqlite3_stmt *stmt = NULL;
+	const char *sql =
+	    "SELECT id,gov_id,name,phone,email,address FROM person ORDER BY name";
+	if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK)
+		return;
+	int first = 1;
+	while (sqlite3_step(stmt) == SQLITE_ROW) {
+		if (!first)
+			FCGX_PutS(",", out);
+		first = 0;
+		FCGX_FPrintF(out, "{\"id\":%d,\"gov_id\":",
+		             sqlite3_column_int(stmt, 0));
+		json_string(out, sqlite3_column_text(stmt, 1));
+		FCGX_PutS(",\"name\":", out);
+		json_string(out, sqlite3_column_text(stmt, 2));
+		FCGX_PutS(",\"phone\":", out);
+		json_string(out, sqlite3_column_text(stmt, 3));
+		FCGX_PutS(",\"email\":", out);
+		json_string(out, sqlite3_column_text(stmt, 4));
+		FCGX_PutS(",\"address\":", out);
+		json_string(out, sqlite3_column_text(stmt, 5));
 		FCGX_PutS("}", out);
 	}
 	sqlite3_finalize(stmt);
@@ -730,6 +893,45 @@ static void list_form_options(FCGX_Request *r) {
 	ok = list_options(r->out, "problem_status") && ok;
 	FCGX_PutS("]}", r->out);
 	(void)ok;
+}
+
+static void list_collection(FCGX_Request *r, const char *resource) {
+	if (!strcmp(resource, "people")) {
+		header(r, 200);
+		FCGX_PutS("[", r->out);
+		list_people_collection(r->out);
+		FCGX_PutS("]", r->out);
+		return;
+	}
+	if (!strcmp(resource, "equipment_type") ||
+	    !strcmp(resource, "problem_type")) {
+		const char *table = resource;
+		header(r, 200);
+		FCGX_PutS("[", r->out);
+		list_options(r->out, table);
+		FCGX_PutS("]", r->out);
+		return;
+	}
+	if (!strcmp(resource, "equipment_vendor")) {
+		header(r, 200);
+		FCGX_PutS("[", r->out);
+		list_vendors(r->out);
+		FCGX_PutS("]", r->out);
+		return;
+	}
+	if (!strcmp(resource, "equipment_model")) {
+		header(r, 200);
+		FCGX_PutS("[", r->out);
+		list_models(r->out);
+		FCGX_PutS("]", r->out);
+		return;
+	}
+	if (!strcmp(resource, "problems")) {
+		list_problems(r);
+		return;
+	}
+	header(r, 404);
+	FCGX_PutS("{\"error\":\"ไม่พบทรัพยากร\"}", r->out);
 }
 
 static void create_problem(FCGX_Request *r, const char *body) {
@@ -824,49 +1026,6 @@ static void create_problem(FCGX_Request *r, const char *body) {
 	}
 }
 
-static void update_problem(FCGX_Request *r, const char *body) {
-	char id_text[16];
-	char status[128];
-	char charge[32];
-	field(body, "id", id_text, sizeof id_text);
-	field(body, "status", status, sizeof status);
-	field(body, "charge", charge, sizeof charge);
-	char *end = NULL;
-	long parsed_id = strtol(id_text, &end, 10);
-	int id = (end != id_text && *end == '\0' && parsed_id > 0 &&
-	          parsed_id <= INT_MAX)
-	             ? (int)parsed_id
-	             : 0;
-	int status_id =
-	    scalar_id("SELECT id FROM problem_status WHERE title=?", status, 0);
-
-	if (id <= 0 || !status_id) {
-		error_response(r, "ข้อมูลการแก้ไขไม่ถูกต้อง");
-		return;
-	}
-
-	sqlite3_stmt *stmt = NULL;
-	const char *sql =
-	    "UPDATE problem SET status_id=?, fix_cost=NULLIF(?, '') WHERE id=?";
-	if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
-		error_response(r, "แก้ไขข้อมูลไม่สำเร็จ");
-		return;
-	}
-	sqlite3_bind_int(stmt, 1, status_id);
-	sqlite3_bind_text(stmt, 2, charge, -1, SQLITE_TRANSIENT);
-	sqlite3_bind_int(stmt, 3, id);
-	int updated =
-	    sqlite3_step(stmt) == SQLITE_DONE && sqlite3_changes(db) == 1;
-	sqlite3_finalize(stmt);
-
-	if (!updated) {
-		error_response(r, "ไม่พบงานซ่อมที่ต้องการแก้ไข");
-		return;
-	}
-	header(r, 200);
-	FCGX_PutS("{\"ok\":true}", r->out);
-}
-
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int main(int argc, char **argv) {
 	if (argc != 2 || FCGX_Init() != 0) {
@@ -924,6 +1083,13 @@ int main(int argc, char **argv) {
 		} else if (uri && !strcmp(uri, "/options") && method &&
 		           !strcmp(method, "GET")) {
 			list_form_options(&request);
+		} else if (uri && method && !strcmp(method, "GET") &&
+		           (!strcmp(uri, "/people") ||
+		            !strcmp(uri, "/equipment_type") ||
+		            !strcmp(uri, "/equipment_vendor") ||
+		            !strcmp(uri, "/equipment_model") ||
+		            !strcmp(uri, "/problem_type"))) {
+			list_collection(&request, uri + 1);
 		} else if (uri &&
 		           (!strcmp(uri, "/person") ||
 		            !strcmp(uri, "/equipment_type") ||
@@ -945,13 +1111,14 @@ int main(int argc, char **argv) {
 			create_record(&request, request_body, action);
 		} else if (uri && !strcmp(uri, "/problems") && method &&
 		           !strcmp(method, "POST")) {
-			char action[32];
-			field(request_body, "action", action, sizeof action);
-			if (!strcmp(action, "update")) {
-				update_problem(&request, request_body);
-			} else {
-				create_problem(&request, request_body);
-			}
+			create_problem(&request, request_body);
+		} else if (uri && method && !strcmp(method, "PATCH") &&
+		           path_id(uri, "/people/")) {
+			update_person(&request, path_id(uri, "/people/"), request_body);
+		} else if (uri && method && !strcmp(method, "PATCH") &&
+		           path_id(uri, "/problems/")) {
+			update_problem_resource(&request, path_id(uri, "/problems/"),
+			                         request_body);
 		} else {
 			header(&request, 404);
 			FCGX_PutS("{\"error\":\"ไม่พบเส้นทางที่ร้องขอ\"}",

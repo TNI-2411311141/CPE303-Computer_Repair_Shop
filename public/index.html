@@ -224,7 +224,7 @@
 
     async function loadOptions() {
       const response = await fetch("/options");
-      if (!response.ok) throw new Error("โหลดตัวเลือกไม่สำเร็จ");
+      if (!response.ok) throw new Error(await response.text());
       const result = await response.json();
       options.equipment_types = result.equipment_types;
       options.problem_types = result.problem_types;
@@ -245,6 +245,7 @@
 
     async function loadTickets() {
       const response = await fetch("/problems");
+      if (!response.ok) throw new Error(await response.text());
       const tickets = await response.json();
 
       ticketTable.innerHTML = tickets.length
@@ -277,15 +278,10 @@
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams(data)
       });
-      const result = await response.json();
+      const result = await response.text();
+      message.textContent = response.ok ? result : result || "บันทึกไม่สำเร็จ";
 
-      message.textContent = result.ok
-        ? "บันทึกสำเร็จ"
-        : [result.error, result.context, result.sqlite_code]
-            .filter(Boolean)
-            .join(" | ") || "เกิดข้อผิดพลาด";
-
-      if (result.ok) {
+      if (response.ok) {
         form.reset();
         await loadTickets();
       }
@@ -311,10 +307,10 @@
           charge: charge ?? ""
         })
       });
-      const result = await response.json();
-
-      if (!result.ok) {
-        alert(result.error || "แก้ไขข้อมูลไม่สำเร็จ");
+      const result = await response.text();
+      if (!response.ok) {
+        alert(result || "แก้ไขข้อมูลไม่สำเร็จ");
+        return;
       }
       await loadTickets();
     });

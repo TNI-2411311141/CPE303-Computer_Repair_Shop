@@ -50,10 +50,18 @@ static const char *status_reason(int status) {
 		return "OK";
 	case 201:
 		return "Created";
+	case 204:
+		return "No Content";
 	case 400:
 		return "Bad Request";
+	case 405:
+		return "Method Not Allowed";
+	case 409:
+		return "Conflict";
 	case 404:
 		return "Not Found";
+	case 422:
+		return "Unprocessable Content";
 	case 500:
 		return "Internal Server Error";
 	default:
@@ -68,22 +76,40 @@ static void header(FCGX_Request *r, int status) {
 	             status, status_reason(status));
 }
 
+static void text_header(FCGX_Request *r, int status) {
+	FCGX_FPrintF(r->out,
+	             "Status: %d %s\r\n"
+	             "Content-Type: text/plain; charset=utf-8\r\n\r\n",
+	             status, status_reason(status));
+}
+
 static void error_response(FCGX_Request *r, const char *message) {
-	header(r, 400);
-	FCGX_FPrintF(r->out, "{\"error\":");
-	json_string(r->out, (const unsigned char *)message);
-	FCGX_PutS("}", r->out);
+	text_header(r, 400);
+	FCGX_PutS(message, r->out);
+}
+
+static void error_response_status(FCGX_Request *r, int status,
+                                  const char *message) {
+	text_header(r, status);
+	FCGX_PutS(message, r->out);
 }
 
 static void sqlite_error_response(FCGX_Request *r, int status,
                                   const char *context) {
-	header(r, status);
-	FCGX_FPrintF(r->out, "{\"error\":");
-	json_string(r->out, (const unsigned char *)sqlite3_errmsg(db));
-	FCGX_FPrintF(r->out, ",\"context\":");
-	json_string(r->out, (const unsigned char *)context);
-	FCGX_FPrintF(r->out, ",\"sqlite_code\":%d}",
-	             sqlite3_extended_errcode(db));
+	text_header(r, status);
+	FCGX_FPrintF(r->out, "%s: %s (SQLite code %d)", context,
+	             sqlite3_errmsg(db), sqlite3_extended_errcode(db));
+}
+
+static int sqlite_write_status(int result) {
+	int code = sqlite3_extended_errcode(db);
+	if (result == SQLITE_CONSTRAINT_UNIQUE ||
+	    code == SQLITE_CONSTRAINT_UNIQUE)
+		return 409;
+	if ((result & 0xff) == SQLITE_CONSTRAINT ||
+	    (code & 0xff) == SQLITE_CONSTRAINT)
+		return 422;
+	return 500;
 }
 
 static void json_string(FCGX_Stream *out, const unsigned char *value) {
@@ -288,33 +314,36 @@ static int model_id_for(const char *model_id, const char *vendor,
 }
 
 static int create_model(const char *model_id, const char *model_name,
-                        int vendor_id, int type_id) {
+                        int vendor_id, int type_id, int *result) {
 	sqlite3_stmt *stmt = NULL;
 	const char *sql =
 	    "INSERT INTO equipment_model(vendor_id,model_id,model_name,type_id) "
 	    "VALUES (?,?,?,?)";
-	if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK)
+	if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+		*result = SQLITE_ERROR;
 		return 0;
+	}
 	sqlite3_bind_int(stmt, 1, vendor_id);
 	sqlite3_bind_text(stmt, 2, model_id, -1, SQLITE_TRANSIENT);
 	sqlite3_bind_text(stmt, 3, model_name, -1, SQLITE_TRANSIENT);
 	sqlite3_bind_int(stmt, 4, type_id);
-	int id = sqlite3_step(stmt) == SQLITE_DONE
-	             ? (int)sqlite3_last_insert_rowid(db)
-	             : 0;
+	*result = sqlite3_step(stmt);
+	int id = *result == SQLITE_DONE ? (int)sqlite3_last_insert_rowid(db) : 0;
 	sqlite3_finalize(stmt);
 	return id;
 }
 
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
-static int insert_text(const char *sql, const char *value) {
+static int insert_text(const char *sql, const char *value, int *result) {
 	sqlite3_stmt *stmt = NULL;
 	int id = 0;
 	if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
 		sqlite3_bind_text(stmt, 1, value, -1, SQLITE_TRANSIENT);
-		if (sqlite3_step(stmt) == SQLITE_DONE)
+		*result = sqlite3_step(stmt);
+		if (*result == SQLITE_DONE)
 			id = (int)sqlite3_last_insert_rowid(db);
-	}
+	} else
+		*result = SQLITE_ERROR;
 	sqlite3_finalize(stmt);
 	return id;
 }
@@ -390,14 +419,15 @@ static void create_record(
 		    !strcmp(action, "equipment_type")
 		        ? "INSERT INTO equipment_type(title) VALUES (?)"
 		        : "INSERT INTO problem_type(title) VALUES (?)";
-		id = insert_text(sql, title);
+		id = insert_text(sql, title, &insert_result);
 	} else if (!strcmp(action, "vendor")) {
 		if (!*vendor) {
 			error_response(r, "กรุณากรอกชื่อผู้ผลิต");
 			return;
 		}
 		id = insert_text(
-		    "INSERT INTO equipment_vendor(name) VALUES (?)", vendor);
+		    "INSERT INTO equipment_vendor(name) VALUES (?)", vendor,
+		    &insert_result);
 	} else if (!strcmp(action, "model")) {
 		int vendor_id = scalar_id(
 		    "SELECT id FROM equipment_vendor WHERE name=?", vendor, 0);
@@ -407,7 +437,8 @@ static void create_record(
 			error_response(r, "กรุณาเลือกผู้ผลิตและประเภทอุปกรณ์ที่มีอยู่");
 			return;
 		}
-		id = create_model(model_id, model_name, vendor_id, type_id);
+		id = create_model(model_id, model_name, vendor_id, type_id,
+		                  &insert_result);
 	} else {
 		error_response(r, "ข้อมูลสำหรับเพิ่มไม่ถูกต้อง");
 		return;
@@ -415,15 +446,16 @@ static void create_record(
 
 	if (!id) {
 			if (!strcmp(action, "person") &&
-			    insert_result == SQLITE_CONSTRAINT_UNIQUE) {
-			error_response(r, "เลขประจำตัวประชาชนนี้มีอยู่แล้ว");
-		} else {
-			error_response(r, sqlite3_errmsg(db));
-		}
+			    insert_result == SQLITE_CONSTRAINT_UNIQUE)
+			error_response_status(r, 409,
+				                      "เลขประจำตัวประชาชนนี้มีอยู่แล้ว");
+			else
+				sqlite_error_response(r, sqlite_write_status(insert_result),
+				                      "เพิ่มข้อมูล");
 		return;
 	}
-	header(r, 201);
-	FCGX_PutS("{\"ok\":true}", r->out);
+	text_header(r, 201);
+	FCGX_PutS("เพิ่มข้อมูลสำเร็จ", r->out);
 }
 
 static void list_problems(FCGX_Request *r) {
@@ -528,7 +560,7 @@ static void get_person(FCGX_Request *r, int id) {
 	sqlite3_bind_int(stmt, 1, id);
 	if (sqlite3_step(stmt) != SQLITE_ROW) {
 		sqlite3_finalize(stmt);
-		error_response(r, "ไม่พบบุคคล");
+		error_response_status(r, 404, "ไม่พบบุคคล");
 		return;
 	}
 	header(r, 200);
@@ -577,7 +609,7 @@ static void get_problem(FCGX_Request *r, int id) {
 	sqlite3_bind_int(stmt, 1, id);
 	if (sqlite3_step(stmt) != SQLITE_ROW) {
 		sqlite3_finalize(stmt);
-		error_response(r, "ไม่พบงานซ่อม");
+		error_response_status(r, 404, "ไม่พบงานซ่อม");
 		return;
 	}
 	header(r, 200);
@@ -666,18 +698,20 @@ static void update_person(FCGX_Request *r, int id, const char *body) {
 	sqlite3_finalize(stmt);
 	if (result != SQLITE_DONE) {
 		if (result == SQLITE_CONSTRAINT_UNIQUE) {
-			error_response(r, "เลขประจำตัวประชาชนนี้มีอยู่แล้ว");
+			error_response_status(r, 409,
+			                     "เลขประจำตัวประชาชนนี้มีอยู่แล้ว");
 		} else {
-			sqlite_error_response(r, 400, "แก้ไขข้อมูลบุคคล");
+			sqlite_error_response(r, sqlite_write_status(result),
+			                      "แก้ไขข้อมูลบุคคล");
 		}
 		return;
 	}
 	if (!record_exists("person", id)) {
-		error_response(r, "ไม่พบบุคคล");
+		error_response_status(r, 404, "ไม่พบบุคคล");
 		return;
 	}
-	header(r, 200);
-	FCGX_PutS("{\"ok\":true}", r->out);
+	text_header(r, 200);
+	FCGX_PutS("บันทึกสำเร็จ", r->out);
 }
 
 static void update_problem_resource(FCGX_Request *r, int id,
@@ -702,11 +736,11 @@ static void update_problem_resource(FCGX_Request *r, int id,
 	int respondent_id =
 	    scalar_id("SELECT id FROM person WHERE id=?", respondent, 0);
 	if (!status_id) {
-		error_response(r, "ไม่พบสถานะงานซ่อม");
+		error_response_status(r, 422, "ไม่พบสถานะงานซ่อม");
 		return;
 	}
 	if (!respondent_id) {
-		error_response(r, "ไม่พบผู้รับผิดชอบ");
+		error_response_status(r, 422, "ไม่พบผู้รับผิดชอบ");
 		return;
 	}
 	sqlite3_stmt *stmt = NULL;
@@ -738,15 +772,15 @@ static void update_problem_resource(FCGX_Request *r, int id,
 	int result = sqlite3_step(stmt);
 	sqlite3_finalize(stmt);
 	if (result != SQLITE_DONE) {
-		sqlite_error_response(r, 400, "แก้ไขงานซ่อม");
+		sqlite_error_response(r, sqlite_write_status(result), "แก้ไขงานซ่อม");
 		return;
 	}
 	if (!record_exists("problem", id)) {
-		error_response(r, "ไม่พบงานซ่อม");
+		error_response_status(r, 404, "ไม่พบงานซ่อม");
 		return;
 	}
-	header(r, 200);
-	FCGX_PutS("{\"ok\":true}", r->out);
+	text_header(r, 200);
+	FCGX_PutS("บันทึกสำเร็จ", r->out);
 }
 
 static int list_options(FCGX_Stream *out, const char *table) {
@@ -938,8 +972,7 @@ static void list_collection(FCGX_Request *r, const char *resource) {
 		list_problems(r);
 		return;
 	}
-	header(r, 404);
-	FCGX_PutS("{\"error\":\"ไม่พบทรัพยากร\"}", r->out);
+	error_response_status(r, 404, "ไม่พบทรัพยากร");
 }
 
 static void create_problem(FCGX_Request *r, const char *body) {
@@ -987,19 +1020,21 @@ static void create_problem(FCGX_Request *r, const char *body) {
 	int respondent_id =
 	    scalar_id("SELECT id FROM person WHERE id=?", respondent, 0);
 	if (!customer_id || !respondent_id) {
-		error_response(r, "กรุณาเลือกข้อมูลบุคคลที่มีอยู่");
+		error_response_status(r, 422, "กรุณาเลือกข้อมูลบุคคลที่มีอยู่");
 		return;
 	}
 	if (!type_id || !issue_id || !customer_id || !respondent_id) {
-		error_response(r,
-		               "กรุณาเพิ่มและเลือกข้อมูลบุคคล ประเภท และผู้รับผิดชอบก่อน");
+		error_response_status(
+		    r, 422,
+		    "กรุณาเพิ่มและเลือกข้อมูลบุคคล ประเภท และผู้รับผิดชอบก่อน");
 		return;
 	}
 	int vendor_id = scalar_id(
 	    "SELECT id FROM equipment_vendor WHERE name=?", vendor, 0);
 	int equipment_model_id = model_id_for(model_id, vendor, type);
 	if (!vendor_id || !equipment_model_id) {
-		error_response(r, "กรุณาเพิ่มและเลือกผู้ผลิตกับรุ่นอุปกรณ์ก่อน");
+		error_response_status(r, 422,
+		                     "กรุณาเพิ่มและเลือกผู้ผลิตกับรุ่นอุปกรณ์ก่อน");
 		return;
 	}
 	const char *sql =
@@ -1027,10 +1062,11 @@ static void create_problem(FCGX_Request *r, const char *body) {
 	int insert_result = sqlite3_step(stmt);
 	sqlite3_finalize(stmt);
 	if (insert_result == SQLITE_DONE) {
-		header(r, 201);
-		FCGX_PutS("{\"ok\":true}", r->out);
+		text_header(r, 201);
+		FCGX_PutS("บันทึกสำเร็จ", r->out);
 	} else {
-		sqlite_error_response(r, 400, "บันทึกงานซ่อม");
+		sqlite_error_response(r, sqlite_write_status(insert_result),
+		                     "บันทึกงานซ่อม");
 	}
 }
 
@@ -1080,9 +1116,8 @@ int main(int argc, char **argv) {
 		    FCGX_GetParam("REQUEST_BODY_FILE", request.envp);
 		char *request_body = load_request_body(body, body_file);
 		if (!request_body) {
-			header(&request, 500);
-			FCGX_PutS("{\"error\":\"อ่านข้อมูลคำขอไม่สำเร็จ\"}",
-			          request.out);
+			text_header(&request, 500);
+			FCGX_PutS("อ่านข้อมูลคำขอไม่สำเร็จ", request.out);
 			FCGX_Finish_r(&request);
 			continue;
 		}
@@ -1135,9 +1170,20 @@ int main(int argc, char **argv) {
 			update_problem_resource(&request, path_id(uri, "/problems/"),
 			                         request_body);
 		} else {
-			header(&request, 404);
-			FCGX_PutS("{\"error\":\"ไม่พบเส้นทางที่ร้องขอ\"}",
-			          request.out);
+			int known_path =
+			    uri && (!strcmp(uri, "/options") ||
+			            !strcmp(uri, "/problems") ||
+			            !strcmp(uri, "/people") ||
+			            !strcmp(uri, "/equipment_type") ||
+			            !strcmp(uri, "/equipment_vendor") ||
+			            !strcmp(uri, "/equipment_model") ||
+			            !strcmp(uri, "/problem_type") ||
+			            path_id(uri, "/people/") ||
+			            path_id(uri, "/problems/"));
+			error_response_status(&request, known_path ? 405 : 404,
+			                     known_path
+			                         ? "ไม่รองรับเมธอดของคำขอนี้"
+			                         : "ไม่พบเส้นทางที่ร้องขอ");
 		}
 		free(request_body);
 		FCGX_Finish_r(&request);

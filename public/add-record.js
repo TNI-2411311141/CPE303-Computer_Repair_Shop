@@ -26,8 +26,8 @@ function escapeHtml(value) {
 async function loadRecords() {
   if (!tableBody) return;
   const response = await fetch(collection);
+  if (!response.ok) throw new Error(await response.text());
   const records = await response.json();
-  if (!response.ok) throw new Error(records.error || "โหลดข้อมูลไม่สำเร็จ");
   const columns = tableColumns[endpoint];
   tableBody.innerHTML = records.length
     ? records.map((record) => `<tr>${columns.map(([key]) =>
@@ -55,7 +55,7 @@ function fill(select, values) {
 
 async function loadModelChoices() {
   const response = await fetch("/options");
-  if (!response.ok) throw new Error("โหลดข้อมูลไม่สำเร็จ");
+  if (!response.ok) throw new Error(await response.text());
   const data = await response.json();
   fill(form.elements.vendor, data.vendors);
   fill(form.elements.equipment_type, data.equipment_types);
@@ -80,9 +80,9 @@ form.addEventListener("submit", async (event) => {
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams(data)
   });
-  const result = await response.json();
-  message.textContent = result.ok ? "เพิ่มข้อมูลสำเร็จ" : result.error;
-  if (result.ok) {
+  const result = await response.text();
+  message.textContent = response.ok ? result : result || "เพิ่มข้อมูลไม่สำเร็จ";
+  if (response.ok) {
     form.reset();
     loadRecords().catch((error) => { message.textContent = error.message; });
   }

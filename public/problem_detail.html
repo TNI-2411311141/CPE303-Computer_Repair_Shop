@@ -41,9 +41,8 @@
     }[character]));
     fetch(`/problems/${encodeURIComponent(id)}`)
       .then(async (response) => {
-        const result = await response.json();
-        if (!response.ok) throw new Error(result.error || "โหลดข้อมูลไม่สำเร็จ");
-        return result;
+        if (!response.ok) throw new Error(await response.text());
+        return response.json();
       })
       .then(async (problem) => {
         container.innerHTML = `
@@ -94,7 +93,9 @@
           editButton.disabled = editing;
           saveButton.disabled = !editing;
         }
-        const options = await fetch("/options").then((response) => response.json());
+        const optionsResponse = await fetch("/options");
+        if (!optionsResponse.ok) throw new Error(await optionsResponse.text());
+        const options = await optionsResponse.json();
         const respondent = form.elements.respondent_id;
         respondent.replaceChildren(...options.people.map(({ id, title }) => {
           const option = document.createElement("option");
@@ -135,10 +136,10 @@
             headers: {"Content-Type": "application/x-www-form-urlencoded"},
             body: new URLSearchParams(data)
           });
-          const result = await response.json();
+          const result = await response.text();
           form.querySelector("#message").textContent =
-            result.ok ? "บันทึกสำเร็จ" : result.error;
-          if (result.ok) setEditing(false);
+            result || (response.ok ? "บันทึกสำเร็จ" : "บันทึกไม่สำเร็จ");
+          if (response.ok) setEditing(false);
         });
       })
       .catch((error) => { container.textContent = error.message; });

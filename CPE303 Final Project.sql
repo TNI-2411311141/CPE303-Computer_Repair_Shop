@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS equipment_model(
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	vendor_id INTEGER NOT NULL REFERENCES equipment_vendor(id),
 	model_id TEXT NOT NULL,
+	model_name TEXT NOT NULL,
 	type_id INTEGER NOT NULL REFERENCES equipment_type(id),
 	UNIQUE(vendor_id, model_id)
 );

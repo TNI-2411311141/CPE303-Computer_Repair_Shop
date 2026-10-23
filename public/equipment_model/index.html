@@ -11,15 +11,16 @@
   <form>
     <label>ประเภทอุปกรณ์*<select name="equipment_type" required></select></label><br>
     <label>ผู้ผลิต*<select name="vendor" required></select></label><br>
-    <label>รุ่น*<input name="model" required></label><br>
+    <label>รหัสรุ่น*<input name="model_id" required></label><br>
+    <label>ชื่อรุ่น*<input name="model_name" required></label><br>
     <button>เพิ่มรุ่นอุปกรณ์</button>
     <span></span>
   </form>
   <h2>รายการรุ่นอุปกรณ์</h2>
   <table border="1" cellpadding="8">
-    <thead><tr><th>รหัส</th><th>รุ่น</th><th>ผู้ผลิต</th>
+    <thead><tr><th>รหัสรายการ</th><th>รหัสรุ่น</th><th>ชื่อรุ่น</th><th>ผู้ผลิต</th>
       <th>ประเภทอุปกรณ์</th></tr></thead>
-    <tbody id="records"><tr><td colspan="4">กำลังโหลด...</td></tr></tbody>
+    <tbody id="records"><tr><td colspan="5">กำลังโหลด...</td></tr></tbody>
   </table>
   <script src="/add-record.js"></script>
 </body>

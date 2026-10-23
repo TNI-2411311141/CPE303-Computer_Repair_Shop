@@ -214,11 +214,10 @@
       const models = options.models.filter((model) =>
         model.vendor === vendor && model.equipment_type === type
       );
-      setOptions("model", models, ({ title }) => {
-        const model = models.find((item) => item.title === title);
-        return model ? `${model.title} (${model.vendor})` : title;
-      });
-      if (models.some(({ title }) => title === selectedModel)) {
+      setOptions("model", models,
+        ({ model_name, vendor }) => `${model_name} (${vendor})`,
+        ({ model_id }) => model_id);
+      if (models.some(({ model_id }) => model_id === selectedModel)) {
         form.elements.model.value = selectedModel;
       }
     }

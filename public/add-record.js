@@ -12,7 +12,8 @@ const tableColumns = {
   "/equipment_type": [["id", "รหัส"], ["title", "ประเภทอุปกรณ์"]],
   "/problem_type": [["id", "รหัส"], ["title", "ประเภทปัญหา"]],
   "/equipment_vendor": [["id", "รหัส"], ["title", "ผู้ผลิต"]],
-  "/equipment_model": [["id", "รหัส"], ["title", "รุ่น"],
+  "/equipment_model": [["id", "รหัส"], ["model_id", "รหัสรุ่น"],
+    ["model_name", "ชื่อรุ่น"],
     ["vendor", "ผู้ผลิต"], ["equipment_type", "ประเภทอุปกรณ์"]]
 };
 

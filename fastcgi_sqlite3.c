@@ -268,7 +268,7 @@ static int record_exists(const char *table, int id) {
 	return exists;
 }
 
-static int model_id_for(const char *model, const char *vendor,
+static int model_id_for(const char *model_id, const char *vendor,
                         const char *type) {
 	sqlite3_stmt *stmt = NULL;
 	int id = 0;
@@ -277,7 +277,7 @@ static int model_id_for(const char *model, const char *vendor,
 			  "JOIN equipment_type t ON t.id=m.type_id "
 			  "WHERE m.model_id=? AND v.name=? AND t.title=?";
 	if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
-		sqlite3_bind_text(stmt, 1, model, -1, SQLITE_TRANSIENT);
+		sqlite3_bind_text(stmt, 1, model_id, -1, SQLITE_TRANSIENT);
 		sqlite3_bind_text(stmt, 2, vendor, -1, SQLITE_TRANSIENT);
 		sqlite3_bind_text(stmt, 3, type, -1, SQLITE_TRANSIENT);
 		if (sqlite3_step(stmt) == SQLITE_ROW)
@@ -287,16 +287,18 @@ static int model_id_for(const char *model, const char *vendor,
 	return id;
 }
 
-static int create_model(const char *model, int vendor_id, int type_id) {
+static int create_model(const char *model_id, const char *model_name,
+                        int vendor_id, int type_id) {
 	sqlite3_stmt *stmt = NULL;
 	const char *sql =
-	    "INSERT INTO equipment_model(vendor_id,model_id,type_id) VALUES "
-	    "(?,?,?)";
+	    "INSERT INTO equipment_model(vendor_id,model_id,model_name,type_id) "
+	    "VALUES (?,?,?,?)";
 	if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK)
 		return 0;
 	sqlite3_bind_int(stmt, 1, vendor_id);
-	sqlite3_bind_text(stmt, 2, model, -1, SQLITE_TRANSIENT);
-	sqlite3_bind_int(stmt, 3, type_id);
+	sqlite3_bind_text(stmt, 2, model_id, -1, SQLITE_TRANSIENT);
+	sqlite3_bind_text(stmt, 3, model_name, -1, SQLITE_TRANSIENT);
+	sqlite3_bind_int(stmt, 4, type_id);
 	int id = sqlite3_step(stmt) == SQLITE_DONE
 	             ? (int)sqlite3_last_insert_rowid(db)
 	             : 0;
@@ -330,7 +332,8 @@ static void create_record(
 	unsigned char face[1050000];
 	char title[256];
 	char vendor[128];
-	char model[128];
+	char model_id[128];
+	char model_name[256];
 	char type[128];
 
 	if (!action) {
@@ -345,7 +348,8 @@ static void create_record(
 	field(body, "face", face_base64, sizeof face_base64);
 	field(body, "title", title, sizeof title);
 	field(body, "vendor", vendor, sizeof vendor);
-	field(body, "model", model, sizeof model);
+	field(body, "model_id", model_id, sizeof model_id);
+	field(body, "model_name", model_name, sizeof model_name);
 	field(body, "equipment_type", type, sizeof type);
 
 	int id = 0;
@@ -399,11 +403,11 @@ static void create_record(
 		    "SELECT id FROM equipment_vendor WHERE name=?", vendor, 0);
 		int type_id = scalar_id(
 		    "SELECT id FROM equipment_type WHERE title=?", type, 0);
-		if (!*model || !vendor_id || !type_id) {
+		if (!*model_id || !*model_name || !vendor_id || !type_id) {
 			error_response(r, "กรุณาเลือกผู้ผลิตและประเภทอุปกรณ์ที่มีอยู่");
 			return;
 		}
-		id = create_model(model, vendor_id, type_id);
+		id = create_model(model_id, model_name, vendor_id, type_id);
 	} else {
 		error_response(r, "ข้อมูลสำหรับเพิ่มไม่ถูกต้อง");
 		return;
@@ -426,7 +430,7 @@ static void list_problems(FCGX_Request *r) {
 	sqlite3_stmt *stmt = NULL;
 	const char *sql =
 	    "SELECT "
-	    "p.id,p.title,p.description,p.equipment_serial,p.photo,m.model_id,v.name,"
+	    "p.id,p.title,p.description,p.equipment_serial,p.photo,m.model_name,v.name,"
 	    "et.title,pt.title,ps.title,p.fix_cost,c.name,r.name,p.operating_"
 	    "system_info,c.id,r.id "
 	    "FROM problem p JOIN equipment_model m ON "
@@ -557,7 +561,7 @@ static void get_person(FCGX_Request *r, int id) {
 static void get_problem(FCGX_Request *r, int id) {
 	sqlite3_stmt *stmt = NULL;
 	const char *sql =
-	    "SELECT p.title,p.description,p.equipment_serial,p.photo,m.model_id,"
+	    "SELECT p.title,p.description,p.equipment_serial,p.photo,m.model_name,"
 	    "v.name,et.title,pt.title,ps.title,p.fix_cost,c.id,c.name,r.id,r.name,"
 	    "p.operating_system_info FROM problem p "
 	    "JOIN equipment_model m ON m.id=p.equipment_model_id "
@@ -841,9 +845,9 @@ static void list_vendors(FCGX_Stream *out) {
 static void list_models(FCGX_Stream *out) {
 	sqlite3_stmt *stmt = NULL;
 	const char *sql =
-	    "SELECT m.id,m.model_id,v.name,et.title FROM equipment_model m "
+	    "SELECT m.id,m.model_id,m.model_name,v.name,et.title FROM equipment_model m "
 	    "JOIN equipment_vendor v ON v.id=m.vendor_id JOIN equipment_type "
-	    "et ON et.id=m.type_id ORDER BY v.name,m.model_id";
+	    "et ON et.id=m.type_id ORDER BY v.name,m.model_name";
 	if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK)
 		return;
 	int first = 1;
@@ -854,10 +858,14 @@ static void list_models(FCGX_Stream *out) {
 		FCGX_FPrintF(
 		    out, "{\"id\":%d,\"title\":", sqlite3_column_int(stmt, 0));
 		json_string(out, sqlite3_column_text(stmt, 1));
-		FCGX_PutS(",\"vendor\":", out);
+		FCGX_PutS(",\"model_id\":", out);
+		json_string(out, sqlite3_column_text(stmt, 1));
+		FCGX_PutS(",\"model_name\":", out);
 		json_string(out, sqlite3_column_text(stmt, 2));
-		FCGX_PutS(",\"equipment_type\":", out);
+		FCGX_PutS(",\"vendor\":", out);
 		json_string(out, sqlite3_column_text(stmt, 3));
+		FCGX_PutS(",\"equipment_type\":", out);
+		json_string(out, sqlite3_column_text(stmt, 4));
 		FCGX_PutS("}", out);
 	}
 	sqlite3_finalize(stmt);
@@ -938,7 +946,7 @@ static void create_problem(FCGX_Request *r, const char *body) {
 	char title[256];
 	char description[2048];
 	char serial[256];
-	char model[128];
+	char model_id[128];
 	char vendor[128];
 	char type[128];
 	char issue[128];
@@ -952,7 +960,7 @@ static void create_problem(FCGX_Request *r, const char *body) {
 	field(body, "title", title, sizeof title);
 	field(body, "description", description, sizeof description);
 	field(body, "serial", serial, sizeof serial);
-	field(body, "model", model, sizeof model);
+	field(body, "model", model_id, sizeof model_id);
 	field(body, "vendor", vendor, sizeof vendor);
 	field(body, "equipment_type", type, sizeof type);
 	field(body, "problem_type", issue, sizeof issue);
@@ -962,7 +970,7 @@ static void create_problem(FCGX_Request *r, const char *body) {
 	field(body, "os", os, sizeof os);
 	field(body, "charge", charge, sizeof charge);
 	field(body, "photo", photo_base64, sizeof photo_base64);
-	if (!*title || !*model || !*vendor || !*type || !*issue || !*customer ||
+	if (!*title || !*model_id || !*vendor || !*type || !*issue || !*customer ||
 	    !*respondent || !*status || !*photo_base64) {
 		error_response(r, "กรุณากรอกข้อมูลที่จำเป็นให้ครบถ้วน");
 		return;
@@ -989,8 +997,8 @@ static void create_problem(FCGX_Request *r, const char *body) {
 	}
 	int vendor_id = scalar_id(
 	    "SELECT id FROM equipment_vendor WHERE name=?", vendor, 0);
-	int model_id = model_id_for(model, vendor, type);
-	if (!vendor_id || !model_id) {
+	int equipment_model_id = model_id_for(model_id, vendor, type);
+	if (!vendor_id || !equipment_model_id) {
 		error_response(r, "กรุณาเพิ่มและเลือกผู้ผลิตกับรุ่นอุปกรณ์ก่อน");
 		return;
 	}
@@ -1010,7 +1018,7 @@ static void create_problem(FCGX_Request *r, const char *body) {
 	sqlite3_bind_text(stmt, 3, description, -1, SQLITE_TRANSIENT);
 	sqlite3_bind_text(stmt, 4, serial, -1, SQLITE_TRANSIENT);
 	sqlite3_bind_blob(stmt, 5, photo, (int)photo_size, SQLITE_TRANSIENT);
-	sqlite3_bind_int(stmt, 6, model_id);
+	sqlite3_bind_int(stmt, 6, equipment_model_id);
 	sqlite3_bind_text(stmt, 7, os, -1, SQLITE_TRANSIENT);
 	sqlite3_bind_int(stmt, 8, respondent_id);
 	sqlite3_bind_int(stmt, 9, customer_id);
@@ -1039,6 +1047,13 @@ int main(int argc, char **argv) {
 	}
 	sqlite3_extended_result_codes(db, 1);
 	sqlite3_exec(db, "PRAGMA foreign_keys=ON", NULL, NULL, NULL);
+	sqlite3_exec(db,
+	             "ALTER TABLE equipment_model ADD COLUMN model_name TEXT",
+	             NULL, NULL, NULL);
+	sqlite3_exec(db,
+	             "UPDATE equipment_model SET model_name=model_id "
+	             "WHERE model_name IS NULL",
+	             NULL, NULL, NULL);
 	sqlite3_exec(
 	    db,
 	    "INSERT OR IGNORE INTO problem_status(title) VALUES "

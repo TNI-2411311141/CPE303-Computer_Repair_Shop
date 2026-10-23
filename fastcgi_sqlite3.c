@@ -1071,28 +1071,6 @@ int main(int argc, char **argv) {
 	}
 	sqlite3_extended_result_codes(db, 1);
 	sqlite3_exec(db, "PRAGMA foreign_keys=ON", NULL, NULL, NULL);
-	sqlite3_exec(db,
-	             "ALTER TABLE equipment_model ADD COLUMN model_name TEXT",
-	             NULL, NULL, NULL);
-	sqlite3_exec(db,
-	             "UPDATE equipment_model SET model_name=model_id "
-	             "WHERE model_name IS NULL",
-	             NULL, NULL, NULL);
-	sqlite3_exec(
-	    db,
-	    "INSERT OR IGNORE INTO problem_status(title) VALUES "
-	    "('รับเรื่อง'),('กำลังซ่อม'),('ซ่อมเสร็จ'),('ชำระเงินแล้ว'),('ส่งมอบแล้ว')",
-	    NULL, NULL, NULL);
-	sqlite3_exec(db,
-	             "INSERT OR IGNORE INTO equipment_type(title) VALUES "
-	             "('คอมพิวเตอร์'),('โทรศัพท์มือถือ'),('ปริ้นเตอร์')",
-	             NULL, NULL, NULL);
-	sqlite3_exec(db,
-	             "INSERT OR IGNORE INTO problem_type(title) VALUES "
-	             "('ถามข้อสงสัย'),('หัวจ่ายหมึกเสีย'),('น้ำเข้าอุปกรณ์'),('วงจรมีปัญหา'"
-	             "),('ไฟล์ระบบเสียหาย'),('ลูกค้าไม่ทราบวิธีใช้'),('ติดไวรัส'),('"
-	             "โปรแกรมค้าง'),('ติดใบอนุญาต (license)')",
-	             NULL, NULL, NULL);
 	FCGX_Request request;
 	FCGX_InitRequest(&request, socket, 0);
 	while (FCGX_Accept_r(&request) >= 0) {

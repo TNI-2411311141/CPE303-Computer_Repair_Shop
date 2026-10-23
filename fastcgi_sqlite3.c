@@ -1080,6 +1080,11 @@ int main(int argc, char **argv) {
 		const char *body = FCGX_GetParam("REQUEST_BODY", request.envp);
 		const char *body_file =
 		    FCGX_GetParam("REQUEST_BODY_FILE", request.envp);
+		if (!uri || !method) {
+			error_response(&request, "คำขอไม่มี URI หรือเมธอด");
+			FCGX_Finish_r(&request);
+			continue;
+		}
 		char *request_body = load_request_body(body, body_file);
 		if (!request_body) {
 			text_header(&request, 500);
@@ -1087,32 +1092,29 @@ int main(int argc, char **argv) {
 			FCGX_Finish_r(&request);
 			continue;
 		}
-		if (uri && !strcmp(uri, "/problems") && method &&
-		    !strcmp(method, "GET")) {
+		int problem_id = path_id(uri, "/problems/");
+		int person_id = path_id(uri, "/people/");
+		if (!strcmp(uri, "/problems") && !strcmp(method, "GET")) {
 			list_problems(&request);
-		} else if (uri && method && !strcmp(method, "GET") &&
-		           path_id(uri, "/problems/")) {
-			get_problem(&request, path_id(uri, "/problems/"));
-		} else if (uri && method && !strcmp(method, "GET") &&
-		           path_id(uri, "/people/")) {
-			get_person(&request, path_id(uri, "/people/"));
-		} else if (uri && !strcmp(uri, "/options") && method &&
-		           !strcmp(method, "GET")) {
+		} else if (problem_id && !strcmp(method, "GET")) {
+			get_problem(&request, problem_id);
+		} else if (person_id && !strcmp(method, "GET")) {
+			get_person(&request, person_id);
+		} else if (!strcmp(uri, "/options") && !strcmp(method, "GET")) {
 			list_form_options(&request);
-		} else if (uri && method && !strcmp(method, "GET") &&
+		} else if (!strcmp(method, "GET") &&
 		           (!strcmp(uri, "/people") ||
 		            !strcmp(uri, "/equipment_type") ||
 		            !strcmp(uri, "/equipment_vendor") ||
 		            !strcmp(uri, "/equipment_model") ||
 		            !strcmp(uri, "/problem_type"))) {
 			list_collection(&request, uri + 1);
-		} else if (uri &&
+		} else if (!strcmp(method, "POST") &&
 		           (!strcmp(uri, "/person") ||
 		            !strcmp(uri, "/equipment_type") ||
 		            !strcmp(uri, "/problem_type") ||
 		            !strcmp(uri, "/equipment_vendor") ||
-		            !strcmp(uri, "/equipment_model")) &&
-		           method && !strcmp(method, "POST")) {
+		            !strcmp(uri, "/equipment_model"))) {
 			const char *action = NULL;
 			if (!strcmp(uri, "/person"))
 				action = "person";
@@ -1125,27 +1127,22 @@ int main(int argc, char **argv) {
 			else if (!strcmp(uri, "/equipment_model"))
 				action = "model";
 			create_record(&request, request_body, action);
-		} else if (uri && !strcmp(uri, "/problems") && method &&
-		           !strcmp(method, "POST")) {
+		} else if (!strcmp(uri, "/problems") && !strcmp(method, "POST")) {
 			create_problem(&request, request_body);
-		} else if (uri && method && !strcmp(method, "PATCH") &&
-		           path_id(uri, "/people/")) {
-			update_person(&request, path_id(uri, "/people/"), request_body);
-		} else if (uri && method && !strcmp(method, "PATCH") &&
-		           path_id(uri, "/problems/")) {
-			update_problem_resource(&request, path_id(uri, "/problems/"),
-			                         request_body);
+		} else if (person_id && !strcmp(method, "PATCH")) {
+			update_person(&request, person_id, request_body);
+		} else if (problem_id && !strcmp(method, "PATCH")) {
+			update_problem_resource(&request, problem_id, request_body);
 		} else {
 			int known_path =
-			    uri && (!strcmp(uri, "/options") ||
+			    (!strcmp(uri, "/options") ||
 			            !strcmp(uri, "/problems") ||
 			            !strcmp(uri, "/people") ||
 			            !strcmp(uri, "/equipment_type") ||
 			            !strcmp(uri, "/equipment_vendor") ||
 			            !strcmp(uri, "/equipment_model") ||
 			            !strcmp(uri, "/problem_type") ||
-			            path_id(uri, "/people/") ||
-			            path_id(uri, "/problems/"));
+			            person_id || problem_id);
 			error_response_status(&request, known_path ? 405 : 404,
 			                     known_path
 			                         ? "ไม่รองรับเมธอดของคำขอนี้"
